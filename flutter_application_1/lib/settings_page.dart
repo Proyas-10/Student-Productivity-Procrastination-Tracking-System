@@ -1,5 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_settings.dart';
 
@@ -14,6 +19,19 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState
     extends State<SettingsPage> {
+
+  ////////////////////////////////////////////////////////////
+  /// SUPABASE
+  ////////////////////////////////////////////////////////////
+
+  final supabase =
+      Supabase.instance.client;
+
+  ////////////////////////////////////////////////////////////
+  /// EXPORT IN PROGRESS
+  ////////////////////////////////////////////////////////////
+
+  bool isExporting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -540,54 +558,6 @@ class _SettingsPageState
                   height: 20),
 
               //////////////////////////////////////////////////////
-              /// BACKUP
-              //////////////////////////////////////////////////////
-
-              GestureDetector(
-
-                onTap: () {
-
-                  ScaffoldMessenger.of(
-                      context)
-                      .showSnackBar(
-
-                    SnackBar(
-
-                      content: Text(
-
-                        settings.text(
-
-                          english:
-                          "Backup Completed",
-
-                          spanish:
-                          "Copia Completada",
-                        ),
-                      ),
-                    ),
-                  );
-                },
-
-                child: buildTile(
-
-                  settings,
-
-                  Icons.backup,
-
-                  settings.text(
-
-                    english:
-                    "Backup & Restore",
-
-                    spanish:
-                    "Copia y Restaurar",
-                  ),
-
-                  "",
-                ),
-              ),
-
-              //////////////////////////////////////////////////////
               /// EXPORT DATA
               //////////////////////////////////////////////////////
 
@@ -595,25 +565,8 @@ class _SettingsPageState
 
                 onTap: () {
 
-                  ScaffoldMessenger.of(
-                      context)
-                      .showSnackBar(
-
-                    SnackBar(
-
-                      content: Text(
-
-                        settings.text(
-
-                          english:
-                          "Data Exported Successfully",
-
-                          spanish:
-                          "Datos Exportados",
-                        ),
-                      ),
-                    ),
-                  );
+                  exportMyData(
+                      context, settings);
                 },
 
                 child: buildTile(
@@ -622,7 +575,15 @@ class _SettingsPageState
 
                   Icons.upload_file,
 
-                  settings.text(
+                  isExporting
+                      ? settings.text(
+                    english:
+                    "Exporting...",
+
+                    spanish:
+                    "Exportando...",
+                  )
+                      : settings.text(
 
                     english:
                     "Export My Data",
@@ -647,7 +608,7 @@ class _SettingsPageState
 
                     context: context,
 
-                    builder: (context) {
+                    builder: (dialogContext) {
 
                       return AlertDialog(
 
@@ -684,7 +645,7 @@ class _SettingsPageState
                             onPressed: () {
 
                               Navigator.pop(
-                                  context);
+                                  dialogContext);
                             },
 
                             child:
@@ -703,30 +664,20 @@ class _SettingsPageState
 
                           ElevatedButton(
 
-                            onPressed: () {
+                            style:
+                            ElevatedButton
+                                .styleFrom(
+                              backgroundColor:
+                              Colors.red,
+                            ),
+
+                            onPressed: () async {
 
                               Navigator.pop(
-                                  context);
+                                  dialogContext);
 
-                              ScaffoldMessenger.of(
-                                  context)
-                                  .showSnackBar(
-
-                                SnackBar(
-
-                                  content: Text(
-
-                                    settings.text(
-
-                                      english:
-                                      "All Data Cleared",
-
-                                      spanish:
-                                      "Datos Eliminados",
-                                    ),
-                                  ),
-                                ),
-                              );
+                              await clearAllData(
+                                  context, settings);
                             },
 
                             child:
@@ -864,6 +815,350 @@ class _SettingsPageState
         ),
       ),
     );
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// CSV HELPER
+  ////////////////////////////////////////////////////////////
+  ///
+  /// Wraps a value in double quotes and escapes any internal
+  /// quotes, so commas/newlines/quotes inside fields can't
+  /// break the CSV structure.
+
+  String csvField(dynamic value) {
+
+    final stringValue =
+        value?.toString() ?? "";
+
+    final escaped =
+    stringValue.replaceAll(
+        '"', '""');
+
+    return '"$escaped"';
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// BUILD CSV FROM ROWS
+  ////////////////////////////////////////////////////////////
+
+  String buildCsv(
+
+      String title,
+
+      List<String> columns,
+
+      List<Map<String, dynamic>> rows,
+
+      ) {
+
+    final buffer =
+    StringBuffer();
+
+    buffer.writeln(title);
+
+    buffer.writeln(
+        columns.map(csvField).join(','));
+
+    for (final row in rows) {
+
+      buffer.writeln(
+        columns
+            .map((column) =>
+            csvField(row[column]))
+            .join(','),
+      );
+    }
+
+    buffer.writeln();
+
+    return buffer.toString();
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// EXPORT MY DATA
+  ////////////////////////////////////////////////////////////
+  ///
+  /// Pulls the current user's tasks, delay logs, and focus
+  /// sessions from Supabase, combines them into one CSV file,
+  /// and opens the share sheet so the user can save/send it.
+
+  Future<void> exportMyData(
+
+      BuildContext context,
+
+      AppSettings settings,
+
+      ) async {
+
+    final user =
+        supabase.auth.currentUser;
+
+    if (user == null) return;
+
+    setState(() {
+
+      isExporting = true;
+    });
+
+    try {
+
+      ////////////////////////////////////////////////////////////
+      /// FETCH USER DATA
+      ////////////////////////////////////////////////////////////
+
+      final tasks =
+      List<Map<String, dynamic>>.from(
+        await supabase
+            .from('tasks')
+            .select()
+            .eq('user_id', user.id)
+            .order('created_at',
+            ascending: false),
+      );
+
+      final delayLogs =
+      List<Map<String, dynamic>>.from(
+        await supabase
+            .from('delay_logs')
+            .select()
+            .eq('user_id', user.id)
+            .order('created_at',
+            ascending: false),
+      );
+
+      final focusSessions =
+      List<Map<String, dynamic>>.from(
+        await supabase
+            .from('focus_sessions')
+            .select()
+            .eq('user_id', user.id)
+            .order('created_at',
+            ascending: false),
+      );
+
+      ////////////////////////////////////////////////////////////
+      /// BUILD CSV CONTENT
+      ////////////////////////////////////////////////////////////
+
+      final csvBuffer =
+      StringBuffer();
+
+      csvBuffer.write(
+        buildCsv(
+          'TASKS',
+          [
+            'id',
+            'title',
+            'start_time',
+            'end_time',
+            'completed',
+            'created_at',
+          ],
+          tasks,
+        ),
+      );
+
+      csvBuffer.write(
+        buildCsv(
+          'DELAY LOGS',
+          [
+            'id',
+            'reason',
+            'duration_minutes',
+            'note',
+            'created_at',
+          ],
+          delayLogs,
+        ),
+      );
+
+      csvBuffer.write(
+        buildCsv(
+          'FOCUS SESSIONS',
+          [
+            'id',
+            'duration',
+            'note',
+            'created_at',
+          ],
+          focusSessions,
+        ),
+      );
+
+      ////////////////////////////////////////////////////////////
+      /// WRITE TO FILE
+      ////////////////////////////////////////////////////////////
+
+      final directory =
+      await getTemporaryDirectory();
+
+      final timestamp =
+      DateTime.now()
+          .millisecondsSinceEpoch;
+
+      final file = File(
+          '${directory.path}/my_data_$timestamp.csv');
+
+      await file.writeAsString(
+          csvBuffer.toString());
+
+      ////////////////////////////////////////////////////////////
+      /// SHARE FILE
+      ////////////////////////////////////////////////////////////
+
+      if (!context.mounted) return;
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: settings.text(
+          english:
+          "Here is my exported data",
+          spanish:
+          "Aquí están mis datos exportados",
+        ),
+      );
+
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+
+        SnackBar(
+
+          content: Text(
+
+            settings.text(
+
+              english:
+              "Data Exported Successfully",
+
+              spanish:
+              "Datos Exportados",
+            ),
+          ),
+        ),
+      );
+    }
+
+    catch (error) {
+
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+
+        SnackBar(
+
+          content: Text(
+
+            settings.text(
+
+              english:
+              "Export failed. Please try again.",
+
+              spanish:
+              "Error al exportar. Inténtalo de nuevo.",
+            ),
+          ),
+        ),
+      );
+    }
+
+    finally {
+
+      if (context.mounted) {
+
+        setState(() {
+
+          isExporting = false;
+        });
+      }
+    }
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// CLEAR ALL DATA
+  ////////////////////////////////////////////////////////////
+  ///
+  /// Permanently deletes the current user's tasks, delay logs,
+  /// and focus sessions from Supabase. The user's account and
+  /// profile (`users` table) are left untouched.
+
+  Future<void> clearAllData(
+
+      BuildContext context,
+
+      AppSettings settings,
+
+      ) async {
+
+    final user =
+        supabase.auth.currentUser;
+
+    if (user == null) return;
+
+    try {
+
+      await supabase
+          .from('tasks')
+          .delete()
+          .eq('user_id', user.id);
+
+      await supabase
+          .from('delay_logs')
+          .delete()
+          .eq('user_id', user.id);
+
+      await supabase
+          .from('focus_sessions')
+          .delete()
+          .eq('user_id', user.id);
+
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+
+        SnackBar(
+
+          content: Text(
+
+            settings.text(
+
+              english:
+              "All Data Cleared",
+
+              spanish:
+              "Datos Eliminados",
+            ),
+          ),
+        ),
+      );
+    }
+
+    catch (error) {
+
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+
+        SnackBar(
+
+          content: Text(
+
+            settings.text(
+
+              english:
+              "Failed to clear data. Please try again.",
+
+              spanish:
+              "No se pudieron borrar los datos. Inténtalo de nuevo.",
+            ),
+          ),
+        ),
+      );
+    }
   }
 
   ////////////////////////////////////////////////////////////
