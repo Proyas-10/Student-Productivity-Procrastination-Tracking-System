@@ -23,9 +23,9 @@ void main() async {
     'sb_publishable_8czysszYrMgRcfaJnBljhw_ZAmhi_E5',
   );
 
-  ////////////////////////////////////////////////////////////
-  /// PASSWORD RECOVERY LISTENER
-  ////////////////////////////////////////////////////////////
+  
+  /// pass recovery 
+  
 
   Supabase.instance.client.auth
       .onAuthStateChange
@@ -85,9 +85,9 @@ class MyApp
       debugShowCheckedModeBanner:
       false,
 
-      ////////////////////////////////////////////////////////////
-      /// GLOBAL THEME
-      ////////////////////////////////////////////////////////////
+      
+      /// global theme er
+      
 
       theme: ThemeData(
 
@@ -103,9 +103,7 @@ class MyApp
         Colors.deepPurple,
       ),
 
-      ////////////////////////////////////////////////////////////
-      /// HOME
-      ////////////////////////////////////////////////////////////
+      
 
       home:
       SplashScreen(),
